@@ -1,6 +1,6 @@
-#include <netdb.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
+#include <netdb.h> /* For gethostbyaddr, gethostbyname, struct hostent */
+#include <arpa/inet.h> /* For inet_addr, struct in_addr, inet_ntoa */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <getopt.h>
@@ -11,7 +11,7 @@ extern int h_errno;
 
 /*
   Simple utility to perform forward (A) or reverse (PTR) DNS lookups
-  
+
   Purely for academic purposes; in no way a replacement for dig or nslookup
 */
 int main(int argc, char *argv[argc])
