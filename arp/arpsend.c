@@ -1,6 +1,5 @@
 #include <net/if.h> /* struct ifreq, if_nametoindex */
 #include <sys/socket.h> /* PF_PACKET, SOCK_RAW */
-#include <linux/if_ether.h> /* ETH_P_ARP, ETH_ALEN, struct ethhdr */
 #include <linux/if_packet.h> /* struct sockaddr_ll */
 #include <linux/if_arp.h> /*ARPOP_REQUEST, ARPOP_REPLY, ARPHRD_ETHER, struct arphdr */
 #include <arpa/inet.h> /* htons */
@@ -13,21 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ARP_HLEN 8
-#define ARP_BLEN 20
-#define USAGE "./arpsend [-t request | reply] [--link-layer] source_mac source_ip dest_mac dest_ip"
-
-/*
-  struct arphdr from linux/if_arp.h doesn't include members for the rest of the request
-  so we must create it ourselves
-*/
-struct arpbdy {
-  unsigned char		ar_sha[ETH_ALEN];	/* sender hardware address	*/
-  unsigned char		ar_sip[4];		/* sender IP address		*/
-  unsigned char		ar_tha[ETH_ALEN];	/* target hardware address	*/
-  unsigned char		ar_tip[4];		/* target IP address		*/
-
-};
+#include "arp.h"
 
 int main(int argc, char *argv[argc])
 {
@@ -68,18 +53,19 @@ int main(int argc, char *argv[argc])
     fprintf(stderr, "%2x:", (unsigned char) iface.ifr_hwaddr.sa_data[i]);
   fprintf(stderr, "%.2x\n", (unsigned char) iface.ifr_hwaddr.sa_data[5]);
 
+  unsigned char foo[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+  unsigned char bar[] = {0x82, 0x2d, 0xe7, 0x9d, 0x93, 0xbb}; /* NOT NECESSARY TO USE ACTUAL MAC ADDRESS OF INTERFACE */
   
   // Add options
   opts.sll_family = AF_PACKET;
   opts.sll_protocol = htons(ETH_P_ARP);
-  opts.sll_ifindex = iface_index;
+  opts.sll_ifindex = iface_index; // THIS IS THE ONLY TRULY REQUIRED FIELD
   opts.sll_hatype = ARPHRD_ETHER;
   opts.sll_halen = ETH_ALEN;
   memcpy(opts.sll_addr, iface.ifr_hwaddr.sa_data, ETH_ALEN);
+  /* memcpy(opts.sll_addr, bar, ETH_ALEN); */ // THUS, THE MAC ADDRESS CAN BE FAKED
 
   // Create link layer header
-  unsigned char foo[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-  unsigned char bar[] = {0x82, 0x2d, 0xe7, 0x9d, 0x93, 0xbb}; /* NOT NECESSARY TO USE ACTUAL MAC ADDRESS OF INTERFACE */
   memcpy(ethernet_header.h_dest, foo, ETH_ALEN);
   /* memcpy(ethernet_header.h_source, iface.ifr_hwaddr.sa_data, ETH_ALEN); */
   memcpy(ethernet_header.h_source, bar, ETH_ALEN);
