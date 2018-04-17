@@ -17,4 +17,4 @@ struct arpbdy {
 
 #define ARP_HLEN sizeof(struct arphdr)
 #define ARP_BLEN sizeof(struct arpbdy)
-#define USAGE "./arpsend [-t request | reply] [--link-layer] source_mac source_ip dest_mac dest_ip"
+#define USAGE "./arpsend -i interface [-t request | reply] [--no-link-layer-header] source_mac source_ip dest_mac dest_ip\n"
