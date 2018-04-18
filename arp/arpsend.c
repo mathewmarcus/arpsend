@@ -1,7 +1,8 @@
 #include <net/if.h> /* struct ifreq, if_nametoindex */
-#include <sys/socket.h> /* PF_PACKET, SOCK_RAW */
+#include <sys/socket.h> /* PF_PACKET, SOCK_RAW, AF_PACKET */
 #include <linux/if_packet.h> /* struct sockaddr_ll */
 #include <linux/if_arp.h> /*ARPOP_REQUEST, ARPOP_REPLY, ARPHRD_ETHER, struct arphdr */
+
 #include <arpa/inet.h> /* htons */
 #include <sys/ioctl.h> /* ioctl, SIOCGIFHWADDR */
 
@@ -27,8 +28,49 @@ static unsigned char *packet_atomac(unsigned char *packet, const char *mac_addre
   for (int i = 0; i < 6; i++)
     packet[i] = (unsigned char) buffer[i];
   return packet;
+}
+
+static void packet_print(uint8_t *buffer, socklen_t buffer_size) {
+  unsigned int i = 0;
+
+  printf("0x%04x:\t", i);  
+  while (i < buffer_size) {
+    printf("%02x%02x ", buffer[i], buffer[i+1]);
+    i+=2;
+    if (!(i%16)) {
+      printf("\n");
+      printf("0x%04x:\t", i);
+    }
+  }
+  printf("\n\n");
+
 
 }
+
+void print_arp_response(int socket_fd, socklen_t buffer_size) {
+  uint8_t *buffer = calloc(buffer_size, sizeof(uint8_t));
+  int recvfrom_res;
+
+  if ((recvfrom_res = recvfrom(socket_fd,
+			       buffer,
+			       buffer_size,
+			       0,
+			       NULL,
+			       NULL)) == -1) {
+    perror("recvfrom error");
+    free(buffer);
+    exit(1);
+  }
+  else if (recvfrom_res == 0) {
+    fprintf(stderr, "Failed to receive arp response\n");
+    free(buffer);
+    exit(1);
+  }
+  packet_print(buffer, buffer_size);
+  free(buffer);
+}
+
+
 uint8_t *add_l2_header(uint8_t *packet, const char *dest_mac, const char *source_mac) {
   struct ethhdr ethernet_header;
 
@@ -53,7 +95,7 @@ uint8_t *add_arp_header(uint8_t *packet, const char *arp_op) {
 
   if (!strncmp(arp_op, "request", 7))    
     arp_header.ar_op = htons(ARPOP_REQUEST);
-  else if (!strncmp(arp_op, "response", 8))
+  else if (!strncmp(arp_op, "reply", 5))
     arp_header.ar_op = htons(ARPOP_REPLY);
   else {
     fprintf(stderr, USAGE);
@@ -99,11 +141,12 @@ uint8_t *add_arp_body(uint8_t *packet,
 int main(int argc, char *argv[argc])
 {
   int socket_fd, c, l2_header = 1;
-  unsigned int iface_index;
+  unsigned int iface_index, total_length;
   struct ifreq iface;
   struct sockaddr_ll opts;
   uint8_t buffer[ETH_HLEN+ARP_HLEN+ARP_BLEN], *ptr;
   char *iface_name = NULL, *type = "request";
+  static unsigned char broadcast_mac_adress[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
   opterr = 0;
 
@@ -127,6 +170,7 @@ int main(int argc, char *argv[argc])
   }
 
   if (!iface_name ||
+      strlen(iface_name) > IFNAMSIZ ||
       argc - optind != 4) {
     fprintf(stderr, USAGE);
     exit(1);
@@ -139,47 +183,28 @@ int main(int argc, char *argv[argc])
   ptr = add_arp_header(ptr, type);
   add_arp_body(ptr, argv[optind], argv[optind+1], argv[optind+2], argv[optind+3]);
 
-  unsigned int i = 0, total_length = (l2_header ? ETH_HLEN+ARP_HLEN+ARP_BLEN : ARP_HLEN+ARP_BLEN);
-  printf("0x%04x:\t", i);  
-  while (i < total_length) {
-    printf("%02x%02x ", buffer[i], buffer[i+1]);
-    i+=2;
-    if (!(i%16)) {
-      printf("\n");
-      printf("0x%04x:\t", i);
-    }
-  }
-  printf("\n");
-  printf("Total length: %u\n", total_length);
+  total_length = (l2_header ? ETH_HLEN+ARP_HLEN+ARP_BLEN : ARP_HLEN+ARP_BLEN);
 
   // Get interface index
-  iface_index = if_nametoindex("wlan0");
+  iface_index = if_nametoindex(iface_name);
   if (!iface_index) {
-    fprintf(stderr, "Failed to obtain %s interface index: %s\n", "wlan0", strerror(errno));
+    fprintf(stderr, "Failed to obtain %s interface index: %s\n", iface_name, strerror(errno));
     exit(1);
   }
-  fprintf(stderr, "(DEBUG) Successfully obtained %s interface index: %i\n", "wlan0", iface_index);
-
   
-
   // Create socket
   socket_fd = l2_header ? socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ARP)) : socket(PF_PACKET, SOCK_DGRAM, htons(ETH_P_ARP));
   if (socket_fd == -1) {
     perror("Failed to open socket");
     exit(1);
   }
-  fprintf(stderr, "(DEBUG) Successfully opened raw socket: %i\n", socket_fd);
 
   // Get mac address of interface
-  strcpy(iface.ifr_name, "wlan0");
+  strncpy(iface.ifr_name, iface_name, IFNAMSIZ);
   if (ioctl(socket_fd, SIOCGIFHWADDR, &iface) == -1) {
     fprintf(stderr, "Failed to obtain mac address of %s interface: %s", iface.ifr_name, strerror(errno));
     exit(1);
   }
-  fprintf(stderr, "(DEBUG) Successfully obtained mac address of %s interface: ", iface.ifr_name);
-  for (int i = 0; i < 5; i++)
-    fprintf(stderr, "%2x:", (unsigned char) iface.ifr_hwaddr.sa_data[i]);
-  fprintf(stderr, "%.2x\n", (unsigned char) iface.ifr_hwaddr.sa_data[5]);
 
   // Add options
   opts.sll_family = AF_PACKET;
@@ -187,26 +212,26 @@ int main(int argc, char *argv[argc])
   opts.sll_ifindex = iface_index; // THIS IS THE ONLY TRULY REQUIRED FIELD
   opts.sll_hatype = ARPHRD_ETHER;
   opts.sll_halen = ETH_ALEN;
-
-  unsigned char broadcast_mac_adress[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
   memcpy(opts.sll_addr, broadcast_mac_adress, ETH_ALEN); // FOR ARP REQUESTS, THIS IS THE BROADCAST ADDRESS (ff:ff:ff:ff:ff:ff)
 
-  printf("Sending arp request...\n");
-
-  int bytes_sent;
-  if ((bytes_sent = sendto(socket_fd,
-			   buffer,
-			   total_length,
-			   0,
-			   (struct sockaddr *)&opts,
-			   sizeof(opts))) == -1) {
+  if (sendto(socket_fd,
+  	     buffer,
+  	     total_length,
+  	     0,
+  	     (struct sockaddr *)&opts,
+  	     sizeof(opts)) == -1) {
     perror("Failed to send arp request");
     exit(1);
   }
 
-  printf("Arp request sent!\n");
-  printf("%i\n", bytes_sent == ETH_HLEN+ARP_HLEN+ARP_BLEN);
-  
+  if (!strncmp(type, "request", 7)) {
+    while (1) {
+      print_arp_response(socket_fd, total_length);
+      sleep(1);
+    }
+    
+  }
+
   close(socket_fd);
   return 0;
 }
